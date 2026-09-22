@@ -1,4 +1,4 @@
-﻿# DreamClubKoreanPatcher
+﻿# 드림클럽 한글 패치
 
 드림클럽 정품 ISO에 한국어 번역을 적용해 새 ISO를 만드는 Windows용 패치 프로그램입니다.
 
