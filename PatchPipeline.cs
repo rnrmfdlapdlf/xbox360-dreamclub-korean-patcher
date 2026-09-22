@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
@@ -19,6 +19,7 @@ namespace DreamClubKoreanPatcher
         private readonly Action repackStarted;
         private readonly JavaScriptSerializer serializer;
         private readonly Encoding shiftJis;
+        private UpdatedExecutableLayout updatedLayout;
 
         public PatchPipeline(
             string applicationRoot, Action<string> log,
@@ -41,6 +42,12 @@ namespace DreamClubKoreanPatcher
             string gameRoot, string xexTool, string outputIso,
             string workRoot)
         {
+            RunWithReference(gameRoot, xexTool, outputIso, workRoot, null);
+        }
+
+        public void RunWithReference(string gameRoot, string xexTool, string outputIso, string workRoot, string referenceXex)
+        {
+            updatedLayout = null;
             string inputRoot = MakeDirectory(workRoot, "input");
             string metadataRoot = MakeDirectory(workRoot, "metadata");
             string dialogueMetadata = MakeDirectory(metadataRoot, "dialogue");
@@ -64,6 +71,13 @@ namespace DreamClubKoreanPatcher
                 Quote(unencryptedDefault) + " " + Quote(Path.Combine(gameRoot, "default.xex")),
                 workRoot, false);
 
+            string referenceFlat = flatDefault;
+            if (!String.IsNullOrEmpty(referenceXex))
+            {
+                referenceFlat = Path.Combine(baseRoot, "reference_default.exe");
+                RunProcess(xexTool, "-b " + Quote(referenceFlat) + " " + Quote(referenceXex), workRoot, false);
+                updatedLayout = new UpdatedExecutableLayout(referenceFlat, flatDefault);
+            }
             string defaultManifest = Path.Combine(workRoot, "default_manifest.json");
             RuntimeMetadataBuilder.BuildDialogueMetadata(
                 gameRoot, dialogueMetadata, serializer, shiftJis);
@@ -72,14 +86,15 @@ namespace DreamClubKoreanPatcher
             Directory.CreateDirectory(Path.GetDirectoryName(supplementalNodes));
             RuntimeMetadataBuilder.BuildSupplementalMetadata(
                 gameRoot, dialogueMetadata, supplementalNodes, serializer, shiftJis);
-            NormalizeSupplementalControls(
+            ValidateSupplementalControls(
                 supplementalNodes,
                 Path.Combine(inputRoot, "psw_missing_all.jsonl"));
             RuntimeMetadataBuilder.BuildSongMetadata(
                 gameRoot, songMetadata, serializer, shiftJis);
             RuntimeMetadataBuilder.BuildDefaultManifest(
-                flatDefault, defaultManifest, serializer, shiftJis);
+                referenceFlat, defaultManifest, serializer, shiftJis);
             ApplyDefaultTranslations(defaultManifest);
+            if (updatedLayout != null) updatedLayout.RemapManifest(defaultManifest, serializer);
             RehydrateMailInputs(flatDefault, inputRoot);
             Progress(53);
 
@@ -144,7 +159,8 @@ namespace DreamClubKoreanPatcher
                 {
                     patchedCan, id, supplementalNodes, supplementalInput,
                     globalMap, phaseA,
-                    Path.Combine(patchedRoot, "s" + id + "_supplemental_report.json")
+                    Path.Combine(patchedRoot, "s" + id + "_supplemental_report.json"),
+                    "--character-aware-choices"
                 });
                 File.Copy(phaseA, patchedCan, true);
                 File.Delete(phaseA);
@@ -154,7 +170,8 @@ namespace DreamClubKoreanPatcher
                 {
                     patchedCan, id, supplementalNodes, supplementalInput,
                     globalMap, phaseB,
-                    Path.Combine(patchedRoot, "s" + id + "_phase_b_report.json")
+                    Path.Combine(patchedRoot, "s" + id + "_phase_b_report.json"),
+                    "--character-aware-choices"
                 });
                 File.Copy(phaseB, patchedCan, true);
                 File.Delete(phaseB);
@@ -162,6 +179,21 @@ namespace DreamClubKoreanPatcher
             Progress(74);
 
             string patchedFlat = PatchMailChain(xexRoot, inputRoot, globalMap);
+            string choiceFlat = Path.Combine(xexRoot, "default_choice_ko.exe");
+            if (updatedLayout != null)
+                updatedLayout.ApplyCode(referenceFlat, patchedFlat, Path.Combine(xexRoot, "default_name_ko.exe"), xexRoot);
+            else
+            {
+            ChoiceTextCodePatcher.Apply(
+                flatDefault, patchedFlat, choiceFlat,
+                Path.Combine(xexRoot, "choice_text_code_report.json"));
+
+            NameTokenCodePatcher.Apply(
+                flatDefault, choiceFlat, Path.Combine(xexRoot, "default_name_ko.exe"),
+                Path.Combine(xexRoot, "name_token_code_report.json"));
+            }
+            string nameFlat = Path.Combine(xexRoot, "default_name_ko.exe");
+            patchedFlat = nameFlat;
             BuildRelocatedXex(
                 flatDefault, patchedFlat, unencryptedDefault,
                 Path.Combine(patchedRoot, "default.xex"),
@@ -223,7 +255,7 @@ namespace DreamClubKoreanPatcher
                 "default.xex", "font00.xpr", "font01.xpr", "title_tex.xpr",
                 "common_tex.xpr", "gameui_tex.xpr", "menu01_tex.xpr",
                 "menu02_tex.xpr", "mx000000.xpr", "m0100000.xpr",
-                "m0200000.xpr", "m0300000.xpr"
+                "m0200000.xpr", "m0300000.xpr", "arbeit00.xpr"
             }) patched.Add(name);
             foreach (string id in scenarios) patched.Add("s" + id + ".can");
             for (int index = 0; index <= 10; ++index)
@@ -320,7 +352,7 @@ namespace DreamClubKoreanPatcher
             File.WriteAllText(outputPath, serializer.Serialize(manifest), new UTF8Encoding(false));
         }
 
-        private void NormalizeSupplementalControls(
+        private void ValidateSupplementalControls(
             string nodesPath, string translationsPath)
         {
             Dictionary<string, string> sources = ReadJsonl(nodesPath)
@@ -337,10 +369,9 @@ namespace DreamClubKoreanPatcher
                     throw new InvalidDataException("보조 번역 메타데이터가 없습니다: " + id);
                 int sourceMarkers = source.Count(character => character == 'n');
                 int translationMarkers = translation.Count(character => character == 'n');
-                if (sourceMarkers != 0 && sourceMarkers == translationMarkers)
-                    row["translation"] = translation.Replace(' ', '\u3000');
+                if (sourceMarkers != translationMarkers)
+                    throw new InvalidDataException(id + ": 원문과 번역의 n 제어문자 개수가 다릅니다.");
             }
-            WriteJsonl(translationsPath, rows);
         }
 
         private void RehydrateMailInputs(string flatDefault, string inputRoot)
@@ -358,6 +389,7 @@ namespace DreamClubKoreanPatcher
                     if (separator < 0 || !Int32.TryParse(id.Substring(separator + 1), out slot))
                         throw new InvalidDataException("메일 번역 ID 형식이 잘못되었습니다: " + id);
                     int subjectOffset = checked(subjectBase + slot * 0x858);
+                    if (updatedLayout != null) subjectOffset = updatedLayout.MapData(subjectOffset, 0x820);
                     int bodyOffset = checked(subjectOffset + 0x20);
                     string translation = Convert.ToString(row["translation"]);
                     int translationSeparator = translation.IndexOf('\n');
@@ -697,6 +729,13 @@ namespace DreamClubKoreanPatcher
                     Quote(outputPath),
                     workDirectory, false);
                 VerifyRelocatedPe(patchedPe, verificationPe, newSection);
+                byte[] verifiedFlat = File.ReadAllBytes(verificationPe);
+                if (updatedLayout != null) updatedLayout.Verify(verifiedFlat);
+                else
+                {
+                    ChoiceTextCodePatcher.Verify(verifiedFlat);
+                    NameTokenCodePatcher.Verify(verifiedFlat);
+                }
             }
             finally
             {

@@ -109,6 +109,11 @@ namespace DreamClubKoreanPatcher
             List<SupplementalNode> unique = new List<SupplementalNode>();
             Dictionary<string, SupplementalNode> byText =
                 new Dictionary<string, SupplementalNode>(StringComparer.Ordinal);
+            // Keep the established psw_missing IDs stable. A line used by a
+            // parsed dialogue elsewhere does not cover its separate PSW copy.
+            List<SupplementalNode> shared = new List<SupplementalNode>();
+            Dictionary<string, SupplementalNode> sharedByText =
+                new Dictionary<string, SupplementalNode>(StringComparer.Ordinal);
             foreach (string id in ids)
             {
                 byte[] data = File.ReadAllBytes(Path.Combine(gameRoot, "s" + id + ".can"));
@@ -148,14 +153,16 @@ namespace DreamClubKoreanPatcher
                     data, psw.DataOffset, psw.DataEnd, shiftJis))
                 {
                     if (referenced.Contains(item.RelativeOffset) ||
-                        dialogueTexts.Contains(item.Text) ||
                         ScriptJapaneseCharacterCount(item.Text) == 0) continue;
+                    bool isShared = dialogueTexts.Contains(item.Text);
+                    Dictionary<string, SupplementalNode> lookup = isShared ? sharedByText : byText;
+                    List<SupplementalNode> destination = isShared ? shared : unique;
                     SupplementalNode node;
-                    if (!byText.TryGetValue(item.Text, out node))
+                    if (!lookup.TryGetValue(item.Text, out node))
                     {
                         node = new SupplementalNode { Text = item.Text };
-                        byText.Add(item.Text, node);
-                        unique.Add(node);
+                        lookup.Add(item.Text, node);
+                        destination.Add(node);
                     }
                     List<int> lstOffsets;
                     if (!references.TryGetValue(item.RelativeOffset, out lstOffsets))
@@ -178,6 +185,15 @@ namespace DreamClubKoreanPatcher
                     { "id", "psw_missing_" + index.ToString("00000") },
                     { "sourceText", unique[index].Text },
                     { "locations", unique[index].Locations.ToArray() }
+                });
+            }
+            for (int index = 0; index < shared.Count; ++index)
+            {
+                output.Add(new Dictionary<string, object>
+                {
+                    { "id", "psw_shared_" + index.ToString("00000") },
+                    { "sourceText", shared[index].Text },
+                    { "locations", shared[index].Locations.ToArray() }
                 });
             }
             WriteJsonl(outputPath, output, serializer);

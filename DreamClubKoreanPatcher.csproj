@@ -1,4 +1,4 @@
-<?xml version="1.0" encoding="utf-8"?>
+﻿<?xml version="1.0" encoding="utf-8"?>
 <Project ToolsVersion="4.0" DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
   <PropertyGroup>
     <Configuration Condition=" '$(Configuration)' == '' ">Debug</Configuration>
@@ -38,7 +38,11 @@
     <Compile Include="Program.cs" />
     <Compile Include="MainForm.cs" />
     <Compile Include="PatchRunner.cs" />
+    <Compile Include="TitleUpdatePackage.cs" />
+    <Compile Include="UpdatedExecutableLayout.cs" />
     <Compile Include="PatchPipeline.cs" />
+    <Compile Include="ChoiceTextCodePatcher.cs" />
+    <Compile Include="NameTokenCodePatcher.cs" />
     <Compile Include="Properties\AssemblyInfo.cs" />
   </ItemGroup>
   <ItemGroup>

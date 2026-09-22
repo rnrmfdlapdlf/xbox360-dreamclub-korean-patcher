@@ -1,4 +1,4 @@
-param([string]$Configuration = "Release")
+﻿param([string]$Configuration = "Release", [switch]$Package)
 
 $ErrorActionPreference = "Stop"
 Set-StrictMode -Version 2
@@ -68,7 +68,11 @@ $sources = @(
     (Join-Path $projectRoot "Program.cs"),
     (Join-Path $projectRoot "MainForm.cs"),
     (Join-Path $projectRoot "PatchRunner.cs"),
+    (Join-Path $projectRoot "TitleUpdatePackage.cs"),
+    (Join-Path $projectRoot "UpdatedExecutableLayout.cs"),
     (Join-Path $projectRoot "PatchPipeline.cs"),
+    (Join-Path $projectRoot "ChoiceTextCodePatcher.cs"),
+    (Join-Path $projectRoot "NameTokenCodePatcher.cs"),
     (Join-Path $projectRoot "RuntimeMetadataBuilder.cs"),
     (Join-Path $projectRoot "Properties\AssemblyInfo.cs"),
     (Join-Path $workspace "tools-src\DefaultExeRelocator\Program.cs"),
@@ -107,6 +111,7 @@ if ($LASTEXITCODE -ne 0) { throw "C# build failed with exit code $LASTEXITCODE" 
 Copy-Item -LiteralPath (Join-Path $projectRoot "App.config") `
     -Destination (Join-Path $outputRoot "DreamClubKoreanPatcher.exe.config")
 Copy-Item -LiteralPath (Join-Path $projectRoot "README.md") -Destination $outputRoot
+Copy-Item -LiteralPath (Join-Path $projectRoot "LICENSE") -Destination $outputRoot
 
 $unexpectedAssetFiles = Get-ChildItem -LiteralPath $assetsRoot -Recurse -File |
     Where-Object {
@@ -138,3 +143,18 @@ foreach ($folder in @(
 }
 
 Write-Output "Build complete: $outputRoot"
+
+& node (Join-Path $projectRoot "VerifyReleaseAssets.js") (Join-Path $workspace "input") $assetsRoot
+if ($LASTEXITCODE -ne 0) { throw "Packaged translation verification failed." }
+
+if ($Package) {
+    $packageRoot = Join-Path $projectRoot "dist\DreamClubKoreanPatcher"
+    New-Item -ItemType Directory -Path (Split-Path -Parent $packageRoot) -Force | Out-Null
+    Copy-Item -LiteralPath $outputRoot -Destination $packageRoot -Recurse
+    $packagePath = Join-Path $workspace "DreamClubKoreanPatcher_v260922.zip"
+    if (Test-Path -LiteralPath $packagePath) { Remove-Item -LiteralPath $packagePath }
+    Add-Type -AssemblyName System.IO.Compression.FileSystem
+    [IO.Compression.ZipFile]::CreateFromDirectory(
+        $packageRoot, $packagePath, [IO.Compression.CompressionLevel]::Optimal, $true)
+    Write-Output "Distribution package: $packagePath"
+}

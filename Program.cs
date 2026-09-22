@@ -8,7 +8,7 @@ namespace DreamClubKoreanPatcher
         [STAThread]
         private static void Main(string[] args)
         {
-            if (args.Length == 5 && String.Equals(
+            if ((args.Length == 5 || args.Length == 6) && String.Equals(
                     args[0], "--run-pipeline",
                     StringComparison.OrdinalIgnoreCase))
             {
@@ -21,7 +21,7 @@ namespace DreamClubKoreanPatcher
                         System.IO.Path.GetFullPath(args[2]),
                         System.IO.Path.GetFullPath(args[3]),
                         outputPath,
-                        PathForTestWork(outputPath));
+                        args.Length == 6 ? System.IO.Path.GetFullPath(args[5]) : PathForTestWork(outputPath));
                     Environment.ExitCode = 0;
                 }
                 catch (Exception error)

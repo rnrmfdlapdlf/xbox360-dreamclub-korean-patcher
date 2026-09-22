@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Diagnostics;
 using System.IO;
 using System.Text;
@@ -19,6 +19,11 @@ namespace DreamClubKoreanPatcher
         }
 
         public string Run(string isoPath, string xexToolPath)
+        {
+            return RunWithTitleUpdate(isoPath, xexToolPath, null);
+        }
+
+        public string RunWithTitleUpdate(string isoPath, string xexToolPath, string titleUpdatePath)
         {
             string assetsRoot = Path.Combine(applicationRoot, "Assets");
             string runtimeRoot = Path.Combine(applicationRoot, "Runtime");
@@ -72,6 +77,12 @@ namespace DreamClubKoreanPatcher
                 {
                     throw new InvalidDataException("xextool.exe로 default.xex를 확인하지 못했습니다.");
                 }
+                uint[] gameInfo = TitleUpdatePackage.ExecutionInfo(Path.Combine(gameRoot, "default.xex"));
+                if (gameInfo[3] != 0x445007F0) throw new InvalidDataException("XBOX 360 드림클럽 본편 ISO가 아닙니다.");
+                string referenceXex = null;
+                if (!String.IsNullOrEmpty(titleUpdatePath))
+                    referenceXex = ApplyTitleUpdate(gameRoot, xexToolPath, titleUpdatePath, workRoot, gameInfo);
+                else Log("TU 미선택: 원본 게임에 한국어 패치를 적용합니다.");
                 ChangeStep(3, "완료");
                 ReportProgress(45);
 
@@ -86,9 +97,9 @@ namespace DreamClubKoreanPatcher
                         ChangeStep(5, "진행 중");
                         ReportProgress(88);
                     });
-                pipeline.Run(
+                pipeline.RunWithReference(
                     gameRoot, xexToolPath, outputPath,
-                    Path.Combine(workRoot, "patch"));
+                    Path.Combine(workRoot, "patch"), referenceXex);
                 ChangeStep(4, "완료");
                 ChangeStep(5, "완료");
                 ReportProgress(100);
@@ -100,6 +111,33 @@ namespace DreamClubKoreanPatcher
                 Log("작업 폴더가 보존되었습니다: " + workRoot);
                 throw;
             }
+        }
+
+        private string ApplyTitleUpdate(string gameRoot, string xexTool, string path, string workRoot, uint[] originalInfo)
+        {
+            Log("선택한 TU를 검증합니다: " + Path.GetFileName(path));
+            TitleUpdatePackage package = TitleUpdatePackage.Read(path);
+            if (package.TitleId != 0 && (package.TitleId != originalInfo[3] || package.MediaId != originalInfo[0]))
+                throw new InvalidDataException("TU의 게임 또는 미디어 ID가 ISO와 다릅니다.");
+            string directory = Path.Combine(workRoot, "title_update");
+            Directory.CreateDirectory(directory);
+            string reference = Path.Combine(directory, "original_default.xex");
+            File.Copy(Path.Combine(gameRoot, "default.xex"), reference, false);
+            // Preflight every entry: do not silently ignore unsupported update payloads.
+            foreach (var entry in package.Files)
+            {
+                if (!String.Equals(entry.Key, "default.xexp", StringComparison.OrdinalIgnoreCase))
+                    throw new InvalidDataException("이 TU에는 추가 갱신 파일이 있어 호환성 확인이 필요합니다: " + entry.Key);
+            }
+            string delta = Path.Combine(directory, "default.xexp"), output = Path.Combine(directory, "updated_default.xex");
+            File.WriteAllBytes(delta, package.Files["default.xexp"]);
+            RunProcess(xexTool, "-u -p " + Quote(delta) + " -o " + Quote(output) + " " + Quote(reference), directory, false);
+            uint[] updatedInfo = TitleUpdatePackage.ExecutionInfo(output);
+            if (updatedInfo[0] != originalInfo[0] || updatedInfo[3] != originalInfo[3] || updatedInfo[1] <= originalInfo[1])
+                throw new InvalidDataException("TU 반영 결과의 게임·미디어·버전 정보가 올바르지 않습니다.");
+            File.Copy(output, Path.Combine(gameRoot, "default.xex"), true);
+            Log("TU 반영 완료 (실행 버전 0x" + updatedInfo[1].ToString("X8") + "). 한국어 패치 위치를 확인합니다.");
+            return reference;
         }
 
         private string RunProcess(

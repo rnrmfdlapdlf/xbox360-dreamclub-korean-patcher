@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.ComponentModel;
 using System.Drawing;
 using System.IO;
@@ -22,6 +22,7 @@ namespace DreamClubKoreanPatcher
         private readonly Panel dropPanel;
         private readonly Label isoStatusLabel;
         private readonly Label xexStatusLabel;
+        private readonly Label tuStatusLabel;
         private readonly Button startButton;
         private readonly ProgressBar progressBar;
         private readonly TextBox logBox;
@@ -29,11 +30,12 @@ namespace DreamClubKoreanPatcher
 
         private string isoPath;
         private string xexToolPath;
+        private string titleUpdatePath;
 
         public MainForm()
         {
             Font = new Font("맑은 고딕", 9F, FontStyle.Regular, GraphicsUnit.Point);
-            Text = "DreamClubKoreanPatcher";
+            Text = "DreamClubKoreanPatcher v260922";
             BackColor = Color.FromArgb(248, 249, 252);
             ClientSize = new Size(960, 540);
             MinimumSize = new Size(820, 500);
@@ -52,7 +54,7 @@ namespace DreamClubKoreanPatcher
             root.RowStyles.Add(new RowStyle(SizeType.Percent, 32F));
             Controls.Add(root);
 
-            dropPanel = BuildDropPanel(out isoStatusLabel, out xexStatusLabel);
+            dropPanel = BuildDropPanel(out isoStatusLabel, out xexStatusLabel, out tuStatusLabel);
             root.Controls.Add(dropPanel, 0, 0);
 
             Panel progressPanel = new Panel();
@@ -62,7 +64,7 @@ namespace DreamClubKoreanPatcher
 
             Label heading = new Label();
             heading.AutoSize = true;
-            heading.Font = new Font(Font, FontStyle.Bold);
+            heading.Font = new Font(Font, FontStyle.Regular);
             heading.Text = "진행 상태";
             heading.Location = new Point(26, 9);
             progressPanel.Controls.Add(heading);
@@ -139,7 +141,7 @@ namespace DreamClubKoreanPatcher
             worker.RunWorkerCompleted += WorkerCompleted;
         }
 
-        private Panel BuildDropPanel(out Label isoLabel, out Label xexLabel)
+        private Panel BuildDropPanel(out Label isoLabel, out Label xexLabel, out Label tuLabel)
         {
             Panel panel = new Panel();
             panel.Dock = DockStyle.Fill;
@@ -153,7 +155,7 @@ namespace DreamClubKoreanPatcher
             Label instruction = new Label();
             instruction.AutoSize = false;
             instruction.TextAlign = ContentAlignment.MiddleCenter;
-            instruction.Font = new Font(Font, FontStyle.Bold);
+            instruction.Font = new Font(Font, FontStyle.Regular);
             instruction.ForeColor = Color.FromArgb(29, 61, 122);
             instruction.Text = "ISO 및 필수 파일을 여기에" + Environment.NewLine +
                 "드래그 드롭하거나 클릭해서 선택";
@@ -180,6 +182,13 @@ namespace DreamClubKoreanPatcher
             xexLabel.Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right;
             xexLabel.Click += SelectFilesClick;
             panel.Controls.Add(xexLabel);
+            tuLabel = new Label();
+            tuLabel.AutoEllipsis = true;
+            tuLabel.SetBounds(34, 240, 300, 28);
+            tuLabel.Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right;
+            tuLabel.ForeColor = Color.DimGray;
+            tuLabel.Text = "(옵션) TU 파일을 끌어 놓으면 적용";
+            panel.Controls.Add(tuLabel);
             return panel;
         }
 
@@ -214,7 +223,7 @@ namespace DreamClubKoreanPatcher
                 dialog.Multiselect = true;
                 if (dialog.ShowDialog(this) == DialogResult.OK)
                 {
-                    AcceptFiles(dialog.FileNames);
+                    AcceptFiles(dialog.FileNames, false);
                 }
             }
         }
@@ -229,11 +238,22 @@ namespace DreamClubKoreanPatcher
         {
             if (worker.IsBusy) return;
             string[] files = e.Data.GetData(DataFormats.FileDrop) as string[];
-            if (files != null) AcceptFiles(files);
+            if (files != null) AcceptFiles(files, true);
         }
 
-        private void AcceptFiles(string[] paths)
+        private void AcceptFiles(string[] paths, bool acceptTitleUpdate)
         {
+            if (acceptTitleUpdate)
+            {
+                int count = 0;
+                foreach (string candidate in paths)
+                    if (File.Exists(candidate) && TitleUpdatePackage.IsPackage(candidate)) ++count;
+                if (count > 1)
+                {
+                    MessageBox.Show(this, "TU 파일은 한 번에 하나만 넣어 주십시오.", "TU 선택");
+                    return;
+                }
+            }
             foreach (string path in paths)
             {
                 if (!File.Exists(path)) continue;
@@ -245,6 +265,18 @@ namespace DreamClubKoreanPatcher
                 else if (String.Equals(Path.GetFileName(path), "xextool.exe", StringComparison.OrdinalIgnoreCase))
                 {
                     xexToolPath = Path.GetFullPath(path);
+                }
+                else if (acceptTitleUpdate)
+                {
+                    try
+                    {
+                        TitleUpdatePackage.Read(path);
+                        titleUpdatePath = Path.GetFullPath(path);
+                    }
+                    catch (Exception error)
+                    {
+                        MessageBox.Show(this, error.Message, "TU 파일 확인", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    }
                 }
             }
             RefreshFileState();
@@ -258,6 +290,9 @@ namespace DreamClubKoreanPatcher
             xexStatusLabel.ForeColor = hasXex ? Color.FromArgb(31, 139, 76) : Color.FromArgb(221, 57, 47);
             isoStatusLabel.Text = hasIso ? "✓ ISO: " + Path.GetFileName(isoPath) : "× (필수) 정품 게임 ISO";
             xexStatusLabel.Text = hasXex ? "✓ XEX: " + Path.GetFileName(xexToolPath) : "× (필수) xextool.exe 6.3";
+            bool hasTu = !String.IsNullOrEmpty(titleUpdatePath);
+            tuStatusLabel.Text = hasTu ? "✓ TU: " + Path.GetFileName(titleUpdatePath) : "(옵션) TU 파일을 끌어 놓으면 적용";
+            tuStatusLabel.ForeColor = hasTu ? Color.FromArgb(31, 139, 76) : Color.DimGray;
             startButton.Enabled = hasIso && hasXex && !worker.IsBusy;
         }
 
@@ -268,7 +303,7 @@ namespace DreamClubKoreanPatcher
             progressBar.Value = 0;
             logBox.Clear();
             for (int i = 0; i < stateLabels.Length; ++i) stateLabels[i].Text = "대기";
-            worker.RunWorkerAsync(new[] { isoPath, xexToolPath });
+            worker.RunWorkerAsync(new[] { isoPath, xexToolPath, titleUpdatePath });
         }
 
         private void WorkerDoWork(object sender, DoWorkEventArgs e)
@@ -290,7 +325,7 @@ namespace DreamClubKoreanPatcher
             {
                 BeginInvoke((MethodInvoker)delegate { progressBar.Value = value; });
             };
-            e.Result = runner.Run(arguments[0], arguments[1]);
+            e.Result = runner.RunWithTitleUpdate(arguments[0], arguments[1], arguments[2]);
         }
 
         private void WorkerCompleted(object sender, RunWorkerCompletedEventArgs e)
