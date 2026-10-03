@@ -1,4 +1,8 @@
+<<<<<<< HEAD
 ﻿# DreamClubKoreanPatcher
+=======
+﻿# 드림클럽 한글 패치
+>>>>>>> d70536b0bfeda0355d9f176f63f269df847a3302
 
 드림클럽 정품 ISO와 본편 DLC의 텍스트에 한국어 번역을 적용하는 Windows용 패치 프로그램입니다.
 
