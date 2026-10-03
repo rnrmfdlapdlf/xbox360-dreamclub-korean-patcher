@@ -43,7 +43,12 @@
     <Compile Include="PatchPipeline.cs" />
     <Compile Include="ChoiceTextCodePatcher.cs" />
     <Compile Include="NameTokenCodePatcher.cs" />
+    <Compile Include="KaraokeCheatPatcher.cs" />
+    <Compile Include="KaraokeScorePatcher.cs" />
+    <Compile Include="DlcPatcher.cs" />
+    <Compile Include="..\tools-src\DreamClubDlcTools\StfsPackage.cs"><Link>StfsPackage.cs</Link></Compile>
     <Compile Include="Properties\AssemblyInfo.cs" />
+    <Compile Include="RuntimeMetadataBuilder.cs" />
   </ItemGroup>
   <ItemGroup>
     <None Include="App.config" />
@@ -52,4 +57,10 @@
     </Content>
   </ItemGroup>
   <Import Project="$(MSBuildToolsPath)\Microsoft.CSharp.targets" />
+  <Target Name="GenerateBuildVersion" BeforeTargets="CoreCompile">
+    <Exec Command="powershell.exe -NoProfile -ExecutionPolicy Bypass -File &quot;$(MSBuildProjectDirectory)\GenerateBuildVersion.ps1&quot; -OutputPath &quot;$(MSBuildProjectDirectory)\$(IntermediateOutputPath)BuildVersion.cs&quot;" />
+    <ItemGroup>
+      <Compile Include="$(IntermediateOutputPath)BuildVersion.cs" />
+    </ItemGroup>
+  </Target>
 </Project>

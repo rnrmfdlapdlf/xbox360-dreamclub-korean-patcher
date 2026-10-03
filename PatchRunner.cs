@@ -1,4 +1,5 @@
-﻿using System;
+﻿using System.Linq;
+using System;
 using System.Diagnostics;
 using System.IO;
 using System.Text;
@@ -23,7 +24,7 @@ namespace DreamClubKoreanPatcher
             return RunWithTitleUpdate(isoPath, xexToolPath, null);
         }
 
-        public string RunWithTitleUpdate(string isoPath, string xexToolPath, string titleUpdatePath)
+        public string RunWithTitleUpdate(string isoPath, string xexToolPath, string titleUpdatePath, bool karaokeAlwaysApprove = false, bool karaokeNoScoreLoss = false)
         {
             string assetsRoot = Path.Combine(applicationRoot, "Assets");
             string runtimeRoot = Path.Combine(applicationRoot, "Runtime");
@@ -31,6 +32,8 @@ namespace DreamClubKoreanPatcher
             RequireFile(extractXiso, "XISO 도구");
             RequireFile(Path.Combine(runtimeRoot, "Fonts", "title_Medium.ttf"), "글꼴 에셋");
             RequireFile(Path.Combine(runtimeRoot, "Fonts", "title_Bold.ttf"), "글꼴 에셋");
+            RequireFile(Path.Combine(runtimeRoot, "Fonts", "Gaegu-Regular.ttf"), "취한 상태 글꼴");
+            RequireFile(Path.Combine(runtimeRoot, "Fonts", "NotoSansKR-Regular.ttf"), "보완 글꼴");
 
             ChangeStep(0, "확인 중");
             string isoListing = RunProcess(
@@ -99,7 +102,7 @@ namespace DreamClubKoreanPatcher
                     });
                 pipeline.RunWithReference(
                     gameRoot, xexToolPath, outputPath,
-                    Path.Combine(workRoot, "patch"), referenceXex);
+                    Path.Combine(workRoot, "patch"), referenceXex, karaokeAlwaysApprove, karaokeNoScoreLoss);
                 ChangeStep(4, "완료");
                 ChangeStep(5, "완료");
                 ReportProgress(100);
@@ -297,6 +300,10 @@ namespace DreamClubKoreanPatcher
 
         private void Log(string message)
         {
+            if (message == null) return;
+            message = String.Join(Environment.NewLine, message.Split(new[] { "\r\n", "\n" }, StringSplitOptions.None)
+                .Where(line => !line.Contains("DO NOT load as a PE or EXE file as the format is not valid")));
+            if (String.IsNullOrWhiteSpace(message)) return;
             Action<string> handler = LogReceived;
             if (handler != null) handler(message);
         }

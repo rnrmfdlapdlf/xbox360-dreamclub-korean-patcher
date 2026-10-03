@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
@@ -133,6 +133,42 @@ namespace DreamClubKoreanPatcher
                 functions.Add(function.Start, mapped);
             }
             return mapped + address - function.Start;
+        }
+
+        // Match a complete, explicitly selected control-flow block when a TU
+        // changed other parts of its containing function. Require one exact
+        // normalized match; internal branches retain their relative targets.
+        public int MapCodeBlock(int start, int length)
+        {
+            if (length < 128 || (start & 3) != 0 || (length & 3) != 0)
+                throw Error("검증 코드 구간이 올바르지 않습니다.");
+            uint[] signature = NormalizeBlock(reference, start, length, false);
+            Section text = updatedSections.Single(s => s.Name == ".text");
+            int match = -1;
+            for (int offset = text.Start; offset + length <= text.Start + text.Size; offset += 4)
+            {
+                if (Be32(updated, offset) != Be32(reference, start)) continue;
+                if (!NormalizeBlock(updated, offset, length, true).SequenceEqual(signature)) continue;
+                if (!updatedFunctions.Any(f => f.Start <= offset && offset + length <= f.End)) continue;
+                if (match >= 0) throw Error("검증 코드 구간이 모호합니다.");
+                match = offset;
+            }
+            if (match < 0) throw Error("검증 코드 구간이 변경되었습니다: 0x" + start.ToString("X"));
+            return match;
+        }
+
+        private uint[] NormalizeBlock(byte[] data, int start, int length, bool isUpdated)
+        {
+            uint[] words = Normalize(data, new Function { Start = start, End = start + length }, isUpdated);
+            for (int i = 0; i < words.Length; ++i)
+            {
+                uint word = Be32(data, start + i * 4);
+                if (word >> 26 != 18 || (word & 2) != 0) continue;
+                int displacement = ((int)(word & 0x03FFFFFC) << 6) >> 6;
+                int target = i * 4 + displacement;
+                if (target >= 0 && target < length) words[i] = word;
+            }
+            return words;
         }
 
         private uint[] Normalize(byte[] data, Function function, bool isUpdated)

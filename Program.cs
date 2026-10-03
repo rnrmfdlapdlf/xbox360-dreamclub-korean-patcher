@@ -1,4 +1,5 @@
-using System;
+﻿using System;
+using System.Linq;
 using System.Windows.Forms;
 
 namespace DreamClubKoreanPatcher
@@ -8,6 +9,16 @@ namespace DreamClubKoreanPatcher
         [STAThread]
         private static void Main(string[] args)
         {
+            if(args.Length>=2 && args[0]=="--patch-dlc")
+            {
+                int failures=0;
+                var patcher=new DlcPatcher(AppDomain.CurrentDomain.BaseDirectory,Console.WriteLine);
+                foreach(string input in args.Skip(1))
+                {
+                    try {patcher.RunFolder(input);}catch(Exception error){Console.Error.WriteLine(input+": "+error.Message);++failures;}
+                }
+                Environment.ExitCode=failures==0?0:1;return;
+            }
             if ((args.Length == 5 || args.Length == 6) && String.Equals(
                     args[0], "--run-pipeline",
                     StringComparison.OrdinalIgnoreCase))

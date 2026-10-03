@@ -40,6 +40,9 @@ namespace DreamClubFontPatcher
         private const string JapaneseCompareText = "";
         private const float Font00GlyphEmSize = 35.0f;
         private const float Font01GlyphEmSize = 35.0f;
+        // Noto has a larger em-relative Hangul body than Gaegu. Match the
+        // fallback syllables to the handwritten cells' typical ink size.
+        private const float DrunkFallbackGlyphEmSize = 29.0f;
         private const int GlyphErosionNumerator = 1;
         private const int GlyphErosionDenominator = 2;
 
@@ -554,7 +557,7 @@ namespace DreamClubFontPatcher
 
         private static Bitmap RenderGlyph(
             char character, string fontPath, int tileSize,
-            float glyphEmSize, int channelMode)
+            float glyphEmSize, int channelMode, bool drunkFont = false)
         {
             PrivateFontCollection fonts = new PrivateFontCollection();
             fonts.AddFontFile(fontPath);
@@ -581,6 +584,22 @@ namespace DreamClubFontPatcher
                         new PointF(0, 0),
                         StringFormat.GenericTypographic);
                     RectangleF bounds = path.GetBounds();
+                    if (drunkFont)
+                    {
+                        if (bounds.Width <= 0 || bounds.Height <= 0)
+                            throw new InvalidDataException("Empty font outline: " + character);
+                        // Keep a one-pixel border around the new handwritten
+                        // glyphs. Do not crop unusually tall Hangul syllables.
+                        float scale = Math.Min(1.0f, Math.Min(
+                            (tileSize - 2.0f) / bounds.Width,
+                            (tileSize - 2.0f) / bounds.Height));
+                        using (Matrix fit = new Matrix())
+                        {
+                            fit.Scale(scale, scale);
+                            path.Transform(fit);
+                        }
+                        bounds = path.GetBounds();
+                    }
                     using (Matrix transform = new Matrix())
                     {
                         float targetX;
@@ -592,7 +611,7 @@ namespace DreamClubFontPatcher
                             // custom comma's outline two pixels from the left
                             // while keeping it pinned to the bottom cell edge.
                             targetX = 2.0f - bounds.Left;
-                            targetY = tileSize - bounds.Bottom;
+                            targetY = tileSize - (drunkFont ? 1.0f : 0.0f) - bounds.Bottom;
                         }
                         else if (character == '\'' || character == '"')
                         {
@@ -649,7 +668,7 @@ namespace DreamClubFontPatcher
                         }
                     }
                     int erosionNumerator =
-                        character == ',' ||
+                        drunkFont || character == ',' ||
                         character == '\'' ||
                         character == '"'
                         ? 0
@@ -1259,12 +1278,99 @@ namespace DreamClubFontPatcher
             return templateBlocks[blockY * 8 + sourceBlockX];
         }
 
+        private static int ReadTtf16(byte[] data, int offset)
+        {
+            return (data[offset] << 8) | data[offset + 1];
+        }
+
+        private static HashSet<char> ReadDrunkFontCharacters(string path)
+        {
+            // Consult the font's Unicode cmap instead of relying on GDI's
+            // implicit system-font fallback, which can hide missing glyphs.
+            byte[] data = File.ReadAllBytes(path);
+            int cmap = -1;
+            int weight = -1;
+            int tableCount = ReadTtf16(data, 4);
+            for (int index = 0; index < tableCount; ++index)
+            {
+                int record = 12 + index * 16;
+                string tag = Encoding.ASCII.GetString(data, record, 4);
+                int offset = checked((int)ReadBe32(data, record + 8));
+                int length = checked((int)ReadBe32(data, record + 12));
+                if (offset < 0 || (long)offset + length > data.Length)
+                    throw new InvalidDataException("Invalid font table: " + path);
+                if (tag == "cmap") cmap = offset;
+                if (tag == "OS/2") weight = ReadTtf16(data, offset + 4);
+            }
+            if (cmap < 0 || weight != 400)
+                throw new InvalidDataException("Expected a Unicode font with weight 400: " + path);
+
+            HashSet<char> characters = new HashSet<char>();
+            int subtableCount = ReadTtf16(data, cmap + 2);
+            for (int index = 0; index < subtableCount; ++index)
+            {
+                int record = cmap + 4 + index * 8;
+                int platform = ReadTtf16(data, record);
+                int encoding = ReadTtf16(data, record + 2);
+                if (platform != 0 && !(platform == 3 && (encoding == 1 || encoding == 10)))
+                    continue;
+                int offset = checked(cmap + (int)ReadBe32(data, record + 4));
+                int format = ReadTtf16(data, offset);
+                if (format == 4)
+                {
+                    int count = ReadTtf16(data, offset + 6) / 2;
+                    int ends = offset + 14;
+                    int starts = ends + count * 2 + 2;
+                    int deltas = starts + count * 2;
+                    int ranges = deltas + count * 2;
+                    for (int segment = 0; segment < count; ++segment)
+                    {
+                        int first = ReadTtf16(data, starts + segment * 2);
+                        int last = ReadTtf16(data, ends + segment * 2);
+                        int rangeAddress = ranges + segment * 2;
+                        int range = ReadTtf16(data, rangeAddress);
+                        int delta = ReadTtf16(data, deltas + segment * 2);
+                        for (int code = first; code <= last && code < 0xFFFF; ++code)
+                        {
+                            int glyph = range == 0 ? code :
+                                ReadTtf16(data, rangeAddress + range + (code - first) * 2);
+                            if ((range == 0 || glyph != 0) && ((glyph + delta) & 0xFFFF) != 0)
+                                characters.Add((char)code);
+                        }
+                    }
+                }
+                else if (format == 12)
+                {
+                    int count = checked((int)ReadBe32(data, offset + 12));
+                    for (int group = 0; group < count; ++group)
+                    {
+                        int item = offset + 16 + group * 12;
+                        uint first = ReadBe32(data, item);
+                        uint last = ReadBe32(data, item + 4);
+                        uint glyph = ReadBe32(data, item + 8);
+                        for (uint code = first; code <= last && code < 0xFFFF; ++code)
+                            if (glyph + code - first != 0) characters.Add((char)code);
+                    }
+                }
+            }
+            if (characters.Count == 0)
+                throw new InvalidDataException("No supported Unicode cmap in font: " + path);
+            return characters;
+        }
+
         private static void PatchFont(
             string inputPath, string outputPath, string fontPath,
             List<GlyphMapping> mappings, string previewPath,
-            float glyphEmSize, bool useNativeBlocks)
+            float glyphEmSize, bool useNativeBlocks,
+            string fallbackFontPath = null)
         {
             byte[] xpr = File.ReadAllBytes(inputPath);
+            bool drunkFont = fallbackFontPath != null;
+            HashSet<char> primaryCharacters = drunkFont
+                ? ReadDrunkFontCharacters(fontPath) : null;
+            HashSet<char> fallbackCharacters = drunkFont
+                ? ReadDrunkFontCharacters(fallbackFontPath) : null;
+            List<string> fallbackGlyphs = new List<string>();
             Dictionary<ushort, List<NativeBlock>> nativeDictionary =
                 useNativeBlocks ? BuildNativeDictionary(xpr) : null;
 
@@ -1277,6 +1383,15 @@ namespace DreamClubFontPatcher
                 for (int mappingIndex = 0; mappingIndex < mappings.Count; ++mappingIndex)
                 {
                     GlyphMapping mapping = mappings[mappingIndex];
+                    string selectedFont = fontPath;
+                    if (drunkFont && !primaryCharacters.Contains(mapping.Character))
+                    {
+                        if (!fallbackCharacters.Contains(mapping.Character))
+                            throw new InvalidDataException(
+                                "Neither font contains U+" + ((int)mapping.Character).ToString("X4"));
+                        selectedFont = fallbackFontPath;
+                        fallbackGlyphs.Add(mapping.Character.ToString());
+                    }
                     int width;
                     int height;
                     int baseOffset = GetPageBase(
@@ -1284,8 +1399,9 @@ namespace DreamClubFontPatcher
                     int blocksPerRow = width / 4;
 
                     using (Bitmap glyph = RenderGlyph(
-                        mapping.Character, fontPath, 32,
-                        glyphEmSize, useNativeBlocks ? 2 : 1))
+                        mapping.Character, selectedFont, 32,
+                        selectedFont == fallbackFontPath ? DrunkFallbackGlyphEmSize : glyphEmSize,
+                        useNativeBlocks ? 2 : 1, drunkFont))
                     {
                         previewGraphics.DrawImageUnscaled(
                             glyph, mappingIndex * 32, 0);
@@ -1355,6 +1471,22 @@ namespace DreamClubFontPatcher
                 preview.Save(previewPath, ImageFormat.Png);
             }
             File.WriteAllBytes(outputPath, xpr);
+            if (drunkFont)
+            {
+                File.WriteAllText(Path.ChangeExtension(outputPath, ".font-report.json"),
+                    new JavaScriptSerializer().Serialize(new
+                    {
+                        primaryFont = Path.GetFileName(fontPath),
+                        fallbackFont = Path.GetFileName(fallbackFontPath),
+                        weight = 400,
+                        primaryEmSize = glyphEmSize,
+                        fallbackEmSize = DrunkFallbackGlyphEmSize,
+                        primaryGlyphCount = mappings.Count - fallbackGlyphs.Count,
+                        fallbackGlyphs = fallbackGlyphs.ToArray(),
+                        extraStrokeErosion = false,
+                        nativePunctuationPreserved = true
+                    }), new UTF8Encoding(false));
+            }
             Console.WriteLine(
                 "Patched {0} mapped glyph cells in {1} ({2})",
                 mappings.Count, outputPath,
@@ -1412,7 +1544,7 @@ namespace DreamClubFontPatcher
                     args[7], "--system-menu-manifest-map",
                     StringComparison.OrdinalIgnoreCase);
             bool fontMapOnly =
-                args.Length == 9 &&
+                (args.Length == 9 || (args.Length == 12 && args[9] == "--drunk-fonts")) &&
                 string.Equals(
                     args[7], "--font-map-only",
                     StringComparison.OrdinalIgnoreCase);
@@ -1428,7 +1560,8 @@ namespace DreamClubFontPatcher
                     "[--japanese-compare|--japanese-raw-copy|" +
                     "--system-menu-manifest <manifest.json>|" +
                     "--system-menu-manifest-map <manifest.json> " +
-                    "<glyph-map.json>|--font-map-only <glyph-map.json>]");
+                    "<glyph-map.json>|--font-map-only <glyph-map.json> " +
+                    "[--drunk-fonts <Gaegu-Regular.ttf> <NotoSansKR-Regular.ttf>]]");
                 return 2;
             }
 
@@ -1540,10 +1673,12 @@ namespace DreamClubFontPatcher
                             args[5], "font00_glyph_preview.png"),
                         Font00GlyphEmSize, false);
                     PatchFont(
-                        args[2], outputFont01, args[3], mappings,
+                        args[2], outputFont01,
+                        fontMapOnly && args.Length == 12 ? args[10] : args[3], mappings,
                         Path.Combine(
                             args[5], "font01_glyph_preview.png"),
-                        Font01GlyphEmSize, false);
+                        Font01GlyphEmSize, false,
+                        fontMapOnly && args.Length == 12 ? args[11] : null);
                 }
                 WriteManifest(
                     Path.Combine(args[5], "patch_manifest.txt"),

@@ -45,7 +45,7 @@ namespace DreamClubKoreanPatcher
             RunWithReference(gameRoot, xexTool, outputIso, workRoot, null);
         }
 
-        public void RunWithReference(string gameRoot, string xexTool, string outputIso, string workRoot, string referenceXex)
+        public void RunWithReference(string gameRoot, string xexTool, string outputIso, string workRoot, string referenceXex, bool karaokeAlwaysApprove = false, bool karaokeNoScoreLoss = false)
         {
             updatedLayout = null;
             string inputRoot = MakeDirectory(workRoot, "input");
@@ -94,6 +94,9 @@ namespace DreamClubKoreanPatcher
             RuntimeMetadataBuilder.BuildDefaultManifest(
                 referenceFlat, defaultManifest, serializer, shiftJis);
             ApplyDefaultTranslations(defaultManifest);
+            AddKaraokeSelectionTitle(referenceFlat, defaultManifest);
+            AddMixedScriptTitle(referenceFlat, defaultManifest, 0xDB484,
+                "Ｘｂｏｘ　ＬＩＶＥ店", "Ｘｂｏｘ　ＬＩＶＥ점", "XBOX_LIVE_SHOP");
             if (updatedLayout != null) updatedLayout.RemapManifest(defaultManifest, serializer);
             RehydrateMailInputs(flatDefault, inputRoot);
             Progress(53);
@@ -126,6 +129,8 @@ namespace DreamClubKoreanPatcher
             extend.Add(Path.Combine(inputRoot, "psw_missing_all.jsonl"));
             extend.AddRange(MailInputFiles(inputRoot));
             InvokeHelper("AllTranslatedContentPatcher.Program", extend.ToArray());
+            DlcPatcher.ApplySharedGlyphProfile(applicationRoot, globalMap);
+            Log("DLC 공통 한글 프로필 적용: 기존 코드 유지 및 추가 글자 보완.");
             Progress(59);
 
             string[] scenarios = { "00", "01", "02", "03", "04", "05", "06", "07", "08", "09", "99" };
@@ -179,6 +184,7 @@ namespace DreamClubKoreanPatcher
             Progress(74);
 
             string patchedFlat = PatchMailChain(xexRoot, inputRoot, globalMap);
+            if (updatedLayout != null) PatchTuLiveMessages(flatDefault, patchedFlat, globalMap);
             string choiceFlat = Path.Combine(xexRoot, "default_choice_ko.exe");
             if (updatedLayout != null)
                 updatedLayout.ApplyCode(referenceFlat, patchedFlat, Path.Combine(xexRoot, "default_name_ko.exe"), xexRoot);
@@ -194,6 +200,21 @@ namespace DreamClubKoreanPatcher
             }
             string nameFlat = Path.Combine(xexRoot, "default_name_ko.exe");
             patchedFlat = nameFlat;
+            if (karaokeAlwaysApprove)
+            {
+                patchedFlat = Path.Combine(xexRoot, "default_karaoke_cheat.exe");
+                KaraokeCheatPatcher.Apply(referenceFlat, flatDefault, nameFlat, patchedFlat,
+                    Path.Combine(xexRoot, "karaoke_cheat_report.json"), updatedLayout);
+                Log("치트 적용: 가라오케 항상 승인");
+            }
+            if (karaokeNoScoreLoss)
+            {
+                string scoreFlat = Path.Combine(xexRoot, "default_karaoke_score.exe");
+                KaraokeScorePatcher.Apply(referenceFlat, flatDefault, patchedFlat, scoreFlat,
+                    Path.Combine(xexRoot, "karaoke_score_report.json"), updatedLayout);
+                patchedFlat = scoreFlat;
+                Log("치트 적용: 가라오케 일치율 감소 방지");
+            }
             BuildRelocatedXex(
                 flatDefault, patchedFlat, unencryptedDefault,
                 Path.Combine(patchedRoot, "default.xex"),
@@ -206,7 +227,10 @@ namespace DreamClubKoreanPatcher
                 Path.Combine(gameRoot, "font01.xpr"),
                 Path.Combine(runtimeRoot, "Fonts", "title_Medium.ttf"),
                 Path.Combine(runtimeRoot, "Fonts", "title_Bold.ttf"),
-                patchedRoot, "font_reference.xex", "--font-map-only", globalMap
+                patchedRoot, "font_reference.xex", "--font-map-only", globalMap,
+                "--drunk-fonts",
+                Path.Combine(runtimeRoot, "Fonts", "Gaegu-Regular.ttf"),
+                Path.Combine(runtimeRoot, "Fonts", "NotoSansKR-Regular.ttf")
             });
             foreach (string fontName in new[] { "font00", "font01" })
             {
@@ -350,6 +374,75 @@ namespace DreamClubKoreanPatcher
                 }
             }
             File.WriteAllText(outputPath, serializer.Serialize(manifest), new UTF8Encoding(false));
+        }
+
+        private void AddKaraokeSelectionTitle(string referencePath, string manifestPath)
+        {
+            AddMixedScriptTitle(referencePath, manifestPath, 0xD9F7C,
+                "夢見るCaged Bird", "꿈꾸는 Caged Bird", "KARAOKE_SELECTION_00");
+        }
+
+        private void AddMixedScriptTitle(string referencePath, string manifestPath,
+            int offset, string source, string translation, string id)
+        {
+            // The mixed Japanese/English selection title falls below the general
+            // text extractor's Japanese ratio. Append without renumbering EXE IDs.
+            byte[] expected = shiftJis.GetBytes(source + "\0");
+            byte[] reference = File.ReadAllBytes(referencePath);
+            if (offset + expected.Length > reference.Length ||
+                !reference.Skip(offset).Take(expected.Length).SequenceEqual(expected))
+                throw new InvalidDataException("추가 UI 문구의 원본이 다릅니다: " + id);
+            var manifest = serializer.Deserialize<Dictionary<string, object>>(File.ReadAllText(manifestPath));
+            var entries = Objects(manifest["entries"]).ToList();
+            entries.Add(new Dictionary<string, object> {
+                { "id", id }, { "sourceText", source },
+                { "translation", translation }, { "status", "translated" },
+                { "occurrences", new[] { new Dictionary<string, object> {
+                    { "fileOffset", offset }, { "virtualAddress", offset },
+                    { "byteLimit", expected.Length - 1 }
+                } } }
+            });
+            manifest["entries"] = entries.ToArray();
+            File.WriteAllText(manifestPath, serializer.Serialize(manifest), new UTF8Encoding(false));
+        }
+
+        private void PatchTuLiveMessages(string originalPath, string patchedPath, string mapPath)
+        {
+            byte[] original = File.ReadAllBytes(originalPath);
+            byte[] patched = File.ReadAllBytes(patchedPath);
+            var map = serializer.Deserialize<Dictionary<string, object>>(File.ReadAllText(mapPath));
+            var codes = Objects(map["mappings"]).ToDictionary(
+                row => Convert.ToString(row["character"])[0],
+                row => new[] { Convert.ToByte(row["lead"]), Convert.ToByte(row["trail"]) });
+            string[,] messages = {
+                { "Ｘｂｏｘ　ＬＩＶＥに接続されていないのでいないので\nＸｂｏｘ　ＬＩＶＥ店に行くことができません。",
+                  "Xbox LIVE에 연결되지 않아\n입장할 수 없습니다." },
+                { "マルチプレイヤー ゲーム セッションの権限がないので\nＸｂｏｘ　ＬＩＶＥ店に行くことができません。",
+                  "멀티플레이 권한이 없어\nXbox LIVE점에 입장할 수 없습니다." }
+            };
+            for (int message = 0; message < messages.GetLength(0); ++message)
+            {
+                byte[] source = shiftJis.GetBytes(messages[message, 0] + "\0");
+                var matches = new List<int>();
+                for (int offset = 1; offset <= original.Length - source.Length; ++offset)
+                    if (original[offset - 1] == 0 && original[offset] == source[0] &&
+                        original.Skip(offset).Take(source.Length).SequenceEqual(source)) matches.Add(offset);
+                if (matches.Count == 0) continue; // This message does not exist in every TU.
+                if (matches.Count != 1) throw new InvalidDataException("TU 연결 안내 위치가 모호합니다.");
+                var encoded = new List<byte>();
+                foreach (char c in messages[message, 1])
+                {
+                    byte[] glyph;
+                    encoded.AddRange(codes.TryGetValue(c, out glyph) ? glyph : shiftJis.GetBytes(c.ToString()));
+                }
+                if (encoded.Count >= source.Length) throw new InvalidDataException("TU 연결 안내 번역이 너무 깁니다.");
+                int target = matches[0];
+                if (!patched.Skip(target).Take(source.Length).SequenceEqual(source))
+                    throw new InvalidDataException("TU 연결 안내가 이미 변경되었습니다.");
+                Array.Clear(patched, target, source.Length);
+                encoded.CopyTo(patched, target);
+            }
+            File.WriteAllBytes(patchedPath, patched);
         }
 
         private void ValidateSupplementalControls(
@@ -622,6 +715,10 @@ namespace DreamClubKoreanPatcher
 
         private void Log(string value)
         {
+            if (value == null) return;
+            value = String.Join(Environment.NewLine, value.Split(new[] { "\r\n", "\n" }, StringSplitOptions.None)
+                .Where(line => !line.Contains("DO NOT load as a PE or EXE file as the format is not valid")));
+            if (String.IsNullOrWhiteSpace(value)) return;
             if (log != null) log(value);
         }
 

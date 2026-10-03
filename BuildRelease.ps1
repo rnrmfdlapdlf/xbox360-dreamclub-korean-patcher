@@ -46,6 +46,9 @@ if ($LASTEXITCODE -ne 0) { throw "Asset packaging failed with exit code $LASTEXI
 
 Copy-Item -LiteralPath (Join-Path $workspace "font_220929\title_Medium.ttf") -Destination $fontsRoot
 Copy-Item -LiteralPath (Join-Path $workspace "font_220929\title_Bold.ttf") -Destination $fontsRoot
+foreach ($fontAsset in @("Gaegu-Regular.ttf", "NotoSansKR-Regular.ttf", "Gaegu-OFL.txt", "NotoSansKR-OFL.txt")) {
+    Copy-Item -LiteralPath (Join-Path $workspace "font_220929\drunk\$fontAsset") -Destination $fontsRoot
+}
 Copy-Item -LiteralPath (Join-Path $workspace "tools\exiso.exe") -Destination $runtimeRoot
 
 $fontSource = Get-Content -Raw -Encoding UTF8 -LiteralPath `
@@ -64,7 +67,11 @@ $fontSource = [Regex]::Replace(
 $cleanFontSource = Join-Path $generatedRoot "DreamClubFontPatcher.cs"
 [IO.File]::WriteAllText($cleanFontSource, $fontSource, (New-Object Text.UTF8Encoding($false)))
 
+$buildVersionSource = Join-Path $generatedRoot "BuildVersion.cs"
+& (Join-Path $projectRoot "GenerateBuildVersion.ps1") -OutputPath $buildVersionSource
+
 $sources = @(
+    $buildVersionSource,
     (Join-Path $projectRoot "Program.cs"),
     (Join-Path $projectRoot "MainForm.cs"),
     (Join-Path $projectRoot "PatchRunner.cs"),
@@ -73,6 +80,10 @@ $sources = @(
     (Join-Path $projectRoot "PatchPipeline.cs"),
     (Join-Path $projectRoot "ChoiceTextCodePatcher.cs"),
     (Join-Path $projectRoot "NameTokenCodePatcher.cs"),
+    (Join-Path $projectRoot "KaraokeCheatPatcher.cs"),
+    (Join-Path $projectRoot "KaraokeScorePatcher.cs"),
+    (Join-Path $projectRoot "DlcPatcher.cs"),
+    (Join-Path $workspace "tools-src\DreamClubDlcTools\StfsPackage.cs"),
     (Join-Path $projectRoot "RuntimeMetadataBuilder.cs"),
     (Join-Path $projectRoot "Properties\AssemblyInfo.cs"),
     (Join-Path $workspace "tools-src\DefaultExeRelocator\Program.cs"),
@@ -113,6 +124,9 @@ Copy-Item -LiteralPath (Join-Path $projectRoot "App.config") `
 Copy-Item -LiteralPath (Join-Path $projectRoot "README.md") -Destination $outputRoot
 Copy-Item -LiteralPath (Join-Path $projectRoot "LICENSE") -Destination $outputRoot
 
+& python (Join-Path $workspace "tools-src\DreamClubDlcTools\package_release.py") (Join-Path $runtimeRoot "Dlc")
+if ($LASTEXITCODE -ne 0) { throw "DLC translation packaging failed." }
+
 $unexpectedAssetFiles = Get-ChildItem -LiteralPath $assetsRoot -Recurse -File |
     Where-Object {
         $_.Extension -ne ".jsonl" -and
@@ -151,7 +165,7 @@ if ($Package) {
     $packageRoot = Join-Path $projectRoot "dist\DreamClubKoreanPatcher"
     New-Item -ItemType Directory -Path (Split-Path -Parent $packageRoot) -Force | Out-Null
     Copy-Item -LiteralPath $outputRoot -Destination $packageRoot -Recurse
-    $packagePath = Join-Path $workspace "DreamClubKoreanPatcher_v260922.zip"
+    $packagePath = Join-Path $workspace ("DreamClubKoreanPatcher_v" + (Get-Date).ToString("yyMMdd") + ".zip")
     if (Test-Path -LiteralPath $packagePath) { Remove-Item -LiteralPath $packagePath }
     Add-Type -AssemblyName System.IO.Compression.FileSystem
     [IO.Compression.ZipFile]::CreateFromDirectory(
