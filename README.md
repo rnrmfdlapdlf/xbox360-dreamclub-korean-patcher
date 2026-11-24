@@ -77,7 +77,3 @@ Gaegu와 Noto Sans KR은 SIL Open Font License 1.1을 따릅니다.라이선스 
 This product includes software developed by in <in@fishtank.com>.
 
 자세한 내용은 'docs/THIRD_PARTY_NOTICES' 디렉터리를 참고해 주세요.
-
----
-
-Developed with GPT-5.x · Translated with Gemma 4

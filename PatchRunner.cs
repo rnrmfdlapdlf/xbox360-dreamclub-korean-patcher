@@ -59,6 +59,8 @@ namespace DreamClubKoreanPatcher
             try
             {
                 ChangeStep(2, "진행 중");
+                Log("ISO 풀기 시작");
+                Stopwatch extractWatch = Stopwatch.StartNew();
                 RunProcess(
                     extractXiso,
                     Quote("-q") + " " + Quote("-d") + " " + Quote(gameRoot) + " " +
@@ -66,6 +68,7 @@ namespace DreamClubKoreanPatcher
                     applicationRoot,
                     true);
                 RequireFile(Path.Combine(gameRoot, "default.xex"), "추출된 default.xex");
+                Log("ISO 풀기 완료 (" + extractWatch.Elapsed.TotalSeconds.ToString("0.0") + "초)");
                 ChangeStep(2, "완료");
                 ReportProgress(38);
 
@@ -106,7 +109,10 @@ namespace DreamClubKoreanPatcher
                 ChangeStep(4, "완료");
                 ChangeStep(5, "완료");
                 ReportProgress(100);
+                Log("임시 작업 폴더 정리 시작");
+                Stopwatch cleanupWatch = Stopwatch.StartNew();
                 CleanupWorkFolder(workRoot, isoDirectory, cleanupToken);
+                Log("임시 작업 폴더 정리 끝 (" + cleanupWatch.Elapsed.TotalSeconds.ToString("0.0") + "초)");
                 return outputPath;
             }
             catch

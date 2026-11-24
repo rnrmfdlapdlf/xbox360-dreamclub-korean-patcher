@@ -97,6 +97,10 @@ namespace DreamClubKoreanPatcher
             AddKaraokeSelectionTitle(referenceFlat, defaultManifest);
             AddMixedScriptTitle(referenceFlat, defaultManifest, 0xDB484,
                 "Ｘｂｏｘ　ＬＩＶＥ店", "Ｘｂｏｘ　ＬＩＶＥ점", "XBOX_LIVE_SHOP");
+            // Holiday-notice mail: first day of each host girl's day list.
+            // The extractor skips this 4-byte format string ("、%s日" is EXE_0751).
+            AddMixedScriptTitle(referenceFlat, defaultManifest, 0xDE2DC,
+                "%s日", "%s일", "MAIL_HOLIDAY_FIRST_DAY");
             if (updatedLayout != null) updatedLayout.RemapManifest(defaultManifest, serializer);
             RehydrateMailInputs(flatDefault, inputRoot);
             Progress(53);
@@ -215,39 +219,42 @@ namespace DreamClubKoreanPatcher
                 patchedFlat = scoreFlat;
                 Log("치트 적용: 가라오케 일치율 감소 방지");
             }
-            BuildRelocatedXex(
+            TimedStep("실행 파일(default.xex) 재구성", () => BuildRelocatedXex(
                 flatDefault, patchedFlat, unencryptedDefault,
                 Path.Combine(patchedRoot, "default.xex"),
-                xexTool, xexRoot);
+                xexTool, xexRoot));
 
-            InvokeHelper("DreamClubFontPatcher.Program", new[]
+            TimedStep("한글 글꼴 생성(font00/font01.xpr)", () =>
             {
-                unencryptedDefault,
-                Path.Combine(gameRoot, "font00.xpr"),
-                Path.Combine(gameRoot, "font01.xpr"),
-                Path.Combine(runtimeRoot, "Fonts", "title_Medium.ttf"),
-                Path.Combine(runtimeRoot, "Fonts", "title_Bold.ttf"),
-                patchedRoot, "font_reference.xex", "--font-map-only", globalMap,
-                "--drunk-fonts",
-                Path.Combine(runtimeRoot, "Fonts", "Gaegu-Regular.ttf"),
-                Path.Combine(runtimeRoot, "Fonts", "NotoSansKR-Regular.ttf")
+                InvokeHelper("DreamClubFontPatcher.Program", new[]
+                {
+                    unencryptedDefault,
+                    Path.Combine(gameRoot, "font00.xpr"),
+                    Path.Combine(gameRoot, "font01.xpr"),
+                    Path.Combine(runtimeRoot, "Fonts", "title_Medium.ttf"),
+                    Path.Combine(runtimeRoot, "Fonts", "title_Bold.ttf"),
+                    patchedRoot, "font_reference.xex", "--font-map-only", globalMap,
+                    "--drunk-fonts",
+                    Path.Combine(runtimeRoot, "Fonts", "Gaegu-Regular.ttf"),
+                    Path.Combine(runtimeRoot, "Fonts", "NotoSansKR-Regular.ttf")
+                });
+                foreach (string fontName in new[] { "font00", "font01" })
+                {
+                    string fontPath = Path.Combine(patchedRoot, fontName + ".xpr");
+                    PatchGlyphAliases(fontPath, globalMap);
+                }
             });
-            foreach (string fontName in new[] { "font00", "font01" })
-            {
-                string fontPath = Path.Combine(patchedRoot, fontName + ".xpr");
-                PatchGlyphAliases(fontPath, globalMap);
-            }
-            InvokeHelper("DreamClubUiTexturePatcher.Program", new[]
+            TimedStep("UI 이미지 교체", () => InvokeHelper("DreamClubUiTexturePatcher.Program", new[]
             {
                 gameRoot,
                 Path.Combine(runtimeRoot, "Fonts", "title_Bold.ttf"),
                 patchedRoot,
                 Path.Combine(buildAssets, "ui_previews"),
                 Path.Combine(assetsRoot, "ui_resources.dat")
-            });
+            }));
             Progress(84);
 
-            StageGame(gameRoot, patchedRoot, stagingRoot, scenarios);
+            TimedStep("게임 파일 복사(ISO 준비)", () => StageGame(gameRoot, patchedRoot, stagingRoot, scenarios));
             Repack(stagingRoot, outputIso);
             Progress(99);
         }
@@ -310,12 +317,13 @@ namespace DreamClubKoreanPatcher
         {
             if (repackStarted != null) repackStarted();
             string exiso = Path.Combine(runtimeRoot, "exiso.exe");
-            RunProcess(exiso,
+            TimedStep("ISO 만들기", () => RunProcess(exiso,
                 Quote("-q") + " " + Quote("-c") + " " + Quote(stagingRoot) + " " +
-                Quote(outputIso), runtimeRoot, true);
-            string listing = RunProcess(exiso,
+                Quote(outputIso), runtimeRoot, true));
+            string listing = null;
+            TimedStep("ISO 검증", () => listing = RunProcess(exiso,
                 Quote("-l") + " " + Quote(outputIso),
-                runtimeRoot, true);
+                runtimeRoot, true));
             if (listing.IndexOf("default.xex", StringComparison.OrdinalIgnoreCase) < 0)
                 throw new InvalidDataException("완성된 ISO 검증에 실패했습니다.");
         }
@@ -711,6 +719,16 @@ namespace DreamClubKoreanPatcher
                 "airi_mail_ko.jsonl", "non_character_mail_ko.jsonl"
             };
             return names.Select(name => Path.Combine(inputRoot, name));
+        }
+
+        // Logs the start and end (with elapsed time) of a step that prints
+        // nothing on its own, so slow steps can be found in the log.
+        private void TimedStep(string name, Action action)
+        {
+            Log(name + " 시작");
+            Stopwatch watch = Stopwatch.StartNew();
+            action();
+            Log(name + " 완료 (" + watch.Elapsed.TotalSeconds.ToString("0.0") + "초)");
         }
 
         private void Log(string value)
